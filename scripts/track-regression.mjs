@@ -88,6 +88,7 @@
  *   --source-base <path>  Browser module prefix (default /src)
  *   --url <url>        App URL (default http://localhost:4173)
  *   --headful          Show the browser (debugging)
+ *   --gpu              Use the system GPU in headless mode; verify its renderer
  *   --offline-imagery  Use bundled texture for known Esri/OSM tile images only
  *   --keep-open        Leave the browser open after the run (debugging)
  */
@@ -112,6 +113,7 @@ const SOURCE_BASE = getOpt('--source-base', '/src').replace(/\/$/, '');
 const APP_URL = getOpt('--url', 'http://localhost:4173');
 const APP_ORIGIN = new URL(APP_URL).origin;
 const HEADFUL = getFlag('--headful');
+const HARDWARE_GPU = getFlag('--gpu');
 const OFFLINE_IMAGERY = getFlag('--offline-imagery');
 const KEEP_OPEN = getFlag('--keep-open');
 
@@ -203,6 +205,7 @@ async function main() {
   console.log(`\n3D Tracking Regression Harness`);
   console.log(`  App URL : ${APP_URL}`);
   console.log(`  Mode    : ${HEADFUL ? 'headful' : 'headless'}\n`);
+  if (HARDWARE_GPU) console.log('  GPU     : system GPU requested (same tracking deadlines)');
 
   // Tracking does not assert imagery geography. This optional fixture leaves
   // provider metadata, terrain, models and every tracking assertion untouched.
@@ -243,7 +246,7 @@ async function main() {
       // kills frame production entirely (rAF stops while timers/evals stay
       // alive), wedging any rAF-awaiting evaluation. Same policy as
       // qa-focus-evidence: headful = real GPU.
-      ...(HEADFUL ? [] : ['--use-gl=angle', '--use-angle=swiftshader']),
+      ...(HEADFUL || HARDWARE_GPU ? [] : ['--use-gl=angle', '--use-angle=swiftshader']),
       '--disable-dev-shm-usage',
       '--disable-web-security',
       '--disable-background-timer-throttling',
@@ -489,6 +492,19 @@ async function main() {
     // Small helper: run an expression in the page after the next render frame,
     // so reads happen on a settled frame.
     const evalPage = (fn, ...args) => page.evaluate(fn, ...args);
+
+    const renderer = await evalPage(() => {
+      const gl = window.__godsEyeView.viewer.scene.context._gl;
+      const info = gl.getExtension('WEBGL_debug_renderer_info');
+      return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : null;
+    });
+    console.log(`  Renderer: ${renderer || 'unavailable'}\n`);
+    if (HARDWARE_GPU) {
+      record('renderer: --gpu uses an identifiable hardware renderer',
+        typeof renderer === 'string' && renderer.length > 0
+          && !/swiftshader|llvmpipe|softpipe|software|microsoft basic render/i.test(renderer),
+        renderer || 'hardware renderer could not be verified');
+    }
 
     // ============================================================
     // INVARIANT 4: INIT CLEAN  (run first — establishes baseline)

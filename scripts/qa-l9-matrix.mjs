@@ -33,6 +33,7 @@
  *   node scripts/qa-l9-matrix.mjs --list                 # print the matrix and exit
  *   node scripts/qa-l9-matrix.mjs --json out.json        # machine-readable results
  *   node scripts/qa-l9-matrix.mjs --headful              # watch the browser group
+ *   node scripts/qa-l9-matrix.mjs --gpu                  # headless workstation GPU
  *
  * Exit codes: 0 = no FAILs · 1 = at least one FAIL · 2 = target unreachable.
  */
@@ -57,6 +58,7 @@ const APP_URL = getOpt('--url', 'http://localhost:4173').replace(/\/$/, '');
 const APP_ORIGIN = new URL(APP_URL).origin;
 const CHEAP = has('--cheap');
 const HEADFUL = has('--headful');
+const HARDWARE_GPU = has('--gpu');
 const LIST_ONLY = has('--list');
 const JSON_OUT = getOpt('--json', null);
 const ONLY = (getOpt('--only', '') || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -152,6 +154,34 @@ function keyGuard(name, state) {
     return fail(`${name} key state UNKNOWN — its status endpoint errored or returned a malformed payload on a responsive server, so this check cannot say whether the key is merely absent`);
   }
   return skip(`${name} key presence was not probed (--cheap) — this check cannot pick its keyed/keyless branch`, 'CHEAP');
+}
+
+/** Classify a real Overpass response; absent configuration remains unverified. */
+function classifyOverpassProbe({ status, ok, json, text = '' }) {
+  if (ok && Array.isArray(json?.elements)) return pass(`${json.elements.length} elements`);
+  if (status === 503 && json?.code === 'OVERPASS_NOT_CONFIGURED') {
+    return skip('Detailed OSM queries need an operator-owned or paid service in OVERPASS_UPSTREAMS; this feed has not been verified', 'OWNER-RUN');
+  }
+  return status === 502
+    ? skip(`Overpass upstream unavailable: ${text.slice(0, 80)}`, 'ENV')
+    : fail(`HTTP ${status} ${text.slice(0, 100)}`);
+}
+
+/** Keyless imagery never proves the optional photorealistic-3D claim. */
+function classifyPhotorealProbe(info) {
+  if (!Array.isArray(info?.tilesets)) return fail('The 3D scene graph could not be verified');
+  const photoreal = info.tilesets.find((t) => /google|tile\.googleapis|photorealistic|3dtiles/i.test(t.url));
+  if (!info.tilesets.length) {
+    if (info.hasCredentials === false) {
+      return skip('Photorealistic 3D needs a Google Maps key or Cesium ion token; only the keyless globe has been verified', 'OWNER-RUN');
+    }
+    return fail(`no Cesium3DTileset attached (imagery layers=${info.imagery}, mapStack=${info.mapStack}) — the photorealistic globe is absent`);
+  }
+  if (!photoreal) {
+    return fail(`a 3D tileset is attached but none resolves to Google Photorealistic tiles (urls: ${info.tilesets.map((t) => t.url.slice(0, 60) || '(no url)').join(' | ')}, mapStack=${info.mapStack})`);
+  }
+  if (!photoreal.ready) return fail(`the photorealistic tileset is attached but not ready (mapStack=${info.mapStack})`);
+  return pass(`Photorealistic 3D attached and ready (mapStack=${info.mapStack}, ${info.tilesets.length} tileset(s), imagery layers=${info.imagery})`);
 }
 
 /**
@@ -985,10 +1015,7 @@ check({
     });
     const text = await res.text();
     let json = null; try { json = JSON.parse(text); } catch { /* not json */ }
-    if (res.ok && Array.isArray(json?.elements)) return pass(`${json.elements.length} elements`);
-    return res.status === 502
-      ? skip(`Overpass upstream unavailable: ${text.slice(0, 80)}`, 'ENV')
-      : fail(`HTTP ${res.status} ${text.slice(0, 100)}`);
+    return classifyOverpassProbe({ status: res.status, ok: res.ok, json, text });
   },
 });
 
@@ -1213,7 +1240,8 @@ async function runBrowserGroup(record) {
     // page's main thread past puppeteer's 180 s default and turn a healthy
     // layer into a bogus "probe threw" FAIL.
     protocolTimeout: 420000,
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--use-gl=angle', '--use-angle=swiftshader',
+    args: ['--no-sandbox', '--disable-setuid-sandbox',
+      ...(HARDWARE_GPU ? [] : ['--use-gl=angle', '--use-angle=swiftshader']),
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding',
       // C17 drives the keyless voice path, which asks for a microphone before
       // it mints a token. A fake device + auto-granted permission keeps the
@@ -1308,7 +1336,10 @@ async function runBrowserGroup(record) {
         setTimeout(() => { if (!done) { done = true; try { stop(); } catch { /* removed */ } resolve(false); } }, 20000);
       });
       const canvas = g.viewer.scene.canvas;
-      return { painted, w: canvas?.width ?? 0, h: canvas?.height ?? 0, frames: g.viewer.scene.frameState?.frameNumber ?? null };
+      const gl = g.viewer.scene.context._gl;
+      const rendererInfo = gl.getExtension('WEBGL_debug_renderer_info');
+      const renderer = rendererInfo ? gl.getParameter(rendererInfo.UNMASKED_RENDERER_WEBGL) : null;
+      return { painted, w: canvas?.width ?? 0, h: canvas?.height ?? 0, frames: g.viewer.scene.frameState?.frameNumber ?? null, renderer };
     }, null, 45000);
     paint = paintR.ok ? paintR.value : { probeError: paintR.reason };
   }
@@ -1319,10 +1350,13 @@ async function runBrowserGroup(record) {
     if (paint?.probeError) return crash(`booted in ${bootSec.toFixed(1)} s but the first-paint probe failed: ${paint.probeError}`);
     if (!paint?.painted) return fail(`${bootDetail} — the scene never rendered a frame, so "first paint" is unproven`);
     if (!(paint.w > 0 && paint.h > 0)) return fail(`${bootDetail} — the render canvas has no size`);
+    if (HARDWARE_GPU && (!paint.renderer || /swiftshader|llvmpipe|softpipe|software|microsoft basic render/i.test(paint.renderer))) {
+      return fail(`${bootDetail} — --gpu requires an identifiable hardware renderer; got ${paint.renderer || 'unknown'}`);
+    }
     if (bootSec > BOOT_BUDGET_S) {
       return fail(`${bootDetail} — over the ${BOOT_BUDGET_S} s budget this check states${bootNote ? ` (${bootNote})` : ''}`);
     }
-    return pass(bootDetail);
+    return pass(`${bootDetail}; renderer=${paint.renderer || 'unknown'}`);
   })(), Date.now() - t0);
 
   if (!booted) {
@@ -1421,31 +1455,21 @@ async function runBrowserGroup(record) {
         const prim = prims.get(i);
         if (prim?.constructor?.name !== 'Cesium3DTileset') continue;
         tilesets.push({
-          url: String(prim.resource?.url || prim._url || ''),
+          url: String(prim.resource?.url || prim._url || '').split(/[?#]/, 1)[0],
           ready: prim.ready !== false,
           tilesLoaded: prim.tilesLoaded === true,
         });
       }
       return {
         hasTileset: !!g.tileset,
+        hasCredentials: g.styleManager?.mapStackController?._hasPhotorealCredentials?.() ?? null,
         tilesets,
         imagery: g.viewer.imageryLayers?.length ?? 0,
         mapStack: g.styleManager?.getVisualState?.()?.mapStack ?? null,
       };
     });
     if (!infoR.ok) return crash(`could not read the scene graph: ${infoR.reason}`);
-    const info = infoR.value;
-    const photoreal = info.tilesets.find((t) => /google|tile\.googleapis|photorealistic|3dtiles/i.test(t.url));
-    if (!info.tilesets.length) {
-      return fail(`no Cesium3DTileset attached (imagery layers=${info.imagery}, mapStack=${info.mapStack}) — the photorealistic globe is absent`);
-    }
-    if (!photoreal) {
-      return fail(`a 3D tileset is attached but none resolves to Google Photorealistic tiles (urls: ${info.tilesets.map((t) => t.url.slice(0, 60) || '(no url)').join(' | ')}, mapStack=${info.mapStack})`);
-    }
-    if (!photoreal.ready) {
-      return fail(`the photorealistic tileset is attached but not ready (mapStack=${info.mapStack})`);
-    }
-    return pass(`Photorealistic 3D attached and ready (mapStack=${info.mapStack}, ${info.tilesets.length} tileset(s), imagery layers=${info.imagery})`);
+    return classifyPhotorealProbe(infoR.value);
   });
 
   await step('C3', async () => (pageErrors.length === 0
@@ -2333,5 +2357,7 @@ export {
   isCalibratedAllocationRuntime, trafficFlowInconclusive,
   soleVerdict, RESULT_RE, COCKPIT_RE, FLOOR_RE,
   readFloorVerdict, keyGuard, applyKnownConditions, requiredCreditFor,
+  classifyOverpassProbe,
+  classifyPhotorealProbe,
   CREDIT_EXPECTATIONS, CREDIT_EXEMPT_LAYERS,
 };

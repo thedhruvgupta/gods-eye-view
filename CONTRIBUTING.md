@@ -27,6 +27,22 @@ through Pinokio; the terminal path above remains the contributor path.
 
 Open `http://localhost:4173`. Before sending a PR run `npm run build`, `npm test`, and `npm run test:track` (dev server must be up) — **all three must stay green.**
 
+For local tracking verification on a workstation with a GPU, run
+`npm run test:track -- --gpu`. This keeps the browser headless, verifies the
+reported hardware renderer, and applies the same tracking assertions and
+500 ms arrival deadline. The default headless run uses SwiftShader; on a slow
+software renderer, producing even the first frame can exceed that deadline.
+
+For the live feed and browser matrix, run
+`node scripts/qa-l9-matrix.mjs --only B,C --gpu`. Its output names the active
+renderer. A provider with explicitly absent credentials or an unconfigured
+Overpass service stays `SKIPPED[OWNER-RUN]`: it still needs setup and has not
+been verified. Configured or unknown credentials never excuse a missing 3D
+basemap, and unexpected proxy failures still fail the check.
+
+Sky-asset verification uses native file-URL conversion so the same unit command
+resolves Windows drive letters and paths containing spaces correctly.
+
 ## Checking a built app locally
 
 Run `npm run build` followed by `npm run preview`. Preview serves the built

@@ -6,6 +6,7 @@
 // which likewise pins logic that lives under scripts/.
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as matrix from '../scripts/qa-l9-matrix.mjs';
 import {
   PASS, PASS_SKIPS, FAIL, CRASH, SKIP, OUTCOMES,
   normalizeVerdict, classifyNoScoreboard, readResultLine, readCockpit,
@@ -230,4 +231,64 @@ test('expectation and exemption lists never overlap', () => {
   for (const id of Object.keys(CREDIT_EXEMPT_LAYERS)) {
     assert.equal(CREDIT_EXPECTATIONS[id], undefined, `${id} cannot be both expected and exempt`);
   }
+});
+
+test('an explicitly unconfigured Overpass service remains an owner-run requirement', () => {
+  assert.equal(typeof matrix.classifyOverpassProbe, 'function');
+  const result = matrix.classifyOverpassProbe({
+    status: 503, ok: false,
+    json: { code: 'OVERPASS_NOT_CONFIGURED' }, text: 'not configured',
+  });
+  assert.equal(result.status, SKIP);
+  assert.equal(result.tag, 'OWNER-RUN');
+  assert.match(result.detail, /OVERPASS_UPSTREAMS/);
+});
+
+test('an unknown Overpass failure or malformed success cannot become a configuration skip', () => {
+  assert.equal(typeof matrix.classifyOverpassProbe, 'function');
+  for (const response of [
+    { status: 503, ok: false, json: { error: 'unexpected' }, text: 'unexpected' },
+    { status: 500, ok: false, json: { code: 'OVERPASS_NOT_CONFIGURED' }, text: 'server failure' },
+    { status: 200, ok: true, json: {}, text: '{}' },
+  ]) assert.equal(matrix.classifyOverpassProbe(response).status, FAIL);
+});
+
+test('a valid empty Overpass response is a verified response', () => {
+  assert.equal(typeof matrix.classifyOverpassProbe, 'function');
+  assert.equal(matrix.classifyOverpassProbe({
+    status: 200, ok: true, json: { elements: [] }, text: '{"elements":[]}',
+  }).status, PASS);
+});
+
+test('photorealistic imagery without configured credentials remains unverified', () => {
+  assert.equal(typeof matrix.classifyPhotorealProbe, 'function');
+  const result = matrix.classifyPhotorealProbe({
+    tilesets: [], imagery: 1, mapStack: 'esri-imagery', hasCredentials: false,
+  });
+  assert.equal(result.status, SKIP);
+  assert.equal(result.tag, 'OWNER-RUN');
+  assert.match(result.detail, /Google Maps|Cesium ion/);
+});
+
+test('configured or unknown map credentials cannot excuse missing 3D imagery', () => {
+  assert.equal(typeof matrix.classifyPhotorealProbe, 'function');
+  for (const hasCredentials of [true, null, undefined]) {
+    assert.equal(matrix.classifyPhotorealProbe({
+      tilesets: [], imagery: 1, mapStack: 'esri-imagery', hasCredentials,
+    }).status, FAIL);
+  }
+});
+
+test('the photorealistic gate still requires a ready Google 3D tileset', () => {
+  assert.equal(typeof matrix.classifyPhotorealProbe, 'function');
+  const info = { imagery: 0, mapStack: 'photoreal', hasCredentials: true };
+  assert.equal(matrix.classifyPhotorealProbe({
+    ...info, tilesets: [{ url: 'https://example.test/tiles', ready: true }],
+  }).status, FAIL);
+  assert.equal(matrix.classifyPhotorealProbe({
+    ...info, tilesets: [{ url: 'https://tile.googleapis.com/v1/3dtiles/root.json', ready: false }],
+  }).status, FAIL);
+  assert.equal(matrix.classifyPhotorealProbe({
+    ...info, tilesets: [{ url: 'https://tile.googleapis.com/v1/3dtiles/root.json', ready: true }],
+  }).status, PASS);
 });
