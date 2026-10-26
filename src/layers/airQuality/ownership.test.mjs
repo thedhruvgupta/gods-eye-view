@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Event as CesiumEvent, Math as CesiumMath } from 'cesium';
 import { createAirQualityLayer } from './index.js';
 import { layerFeedState } from '../../data/feedState.js';
 import { STALE_AFTER_MS } from './model.js';
 
-function harness(source) {
+function harness(source, camera) {
   const sources = [];
   const events = [];
   const viewer = {
+    camera,
     dataSources: {
       add(value) {
         sources.push(value);
@@ -52,6 +54,65 @@ const reading = (id, value, overrides = {}) => ({
 });
 
 const staticSource = (rows) => ({ getSnapshot: async () => rows });
+
+test('moving the camera refreshes the visible reading list without another network request', async () => {
+  let rectangle = { west: -99, south: 29, east: -96, north: 32 };
+  const moveEnd = new CesiumEvent();
+  let fetches = 0;
+  const { layer } = harness(
+    {
+      getSnapshot: async () => {
+        fetches++;
+        return [reading('Toronto', 4)];
+      },
+    },
+    {
+      moveEnd,
+      computeViewRectangle: () =>
+        Object.fromEntries(
+          Object.entries(rectangle).map(([key, value]) => [
+            key,
+            CesiumMath.toRadians(value),
+          ]),
+        ),
+    },
+  );
+  let shown;
+  layer.setRowControlsListener(() => {
+    shown = layer.getRowControls().list.items.map(({ id }) => id);
+  });
+  await layer.update();
+  assert.deepEqual(shown, []);
+  rectangle = { west: -85, south: 40, east: -75, north: 50 };
+  moveEnd.raiseEvent();
+  assert.deepEqual(shown, ['eccc:Toronto']);
+  rectangle = { west: -99, south: 29, east: -96, north: 32 };
+  moveEnd.raiseEvent();
+  assert.deepEqual(shown, []);
+  assert.equal(fetches, 1);
+  layer.destroy();
+});
+
+test('camera readout subscriptions follow the enabled lifetime without duplicates', () => {
+  const moveEnd = new CesiumEvent();
+  const { layer } = harness(staticSource([]), { moveEnd });
+  let notifications = 0;
+  layer.setRowControlsListener(() => notifications++);
+  layer.enable();
+  layer.enable();
+  const before = notifications;
+  moveEnd.raiseEvent();
+  assert.equal(notifications, before + 1);
+  layer.disable();
+  assert.equal(moveEnd.numberOfListeners, 0);
+  const disabled = notifications;
+  moveEnd.raiseEvent();
+  assert.equal(notifications, disabled);
+  layer.enable();
+  assert.equal(moveEnd.numberOfListeners, 1);
+  layer.destroy();
+  assert.equal(moveEnd.numberOfListeners, 0);
+});
 
 test('a layer requires both a snapshot source and an overlay host', () => {
   assert.throws(() => createAirQualityLayer(), /snapshot source/);

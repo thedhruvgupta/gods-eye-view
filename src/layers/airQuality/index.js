@@ -36,6 +36,7 @@ export function createAirQualityLayer({ source, overlayHost } = {}) {
   let _lastError = null;
   let _enabled = false;
   let rowControlsListener = null;
+  let removeCameraEnd = null;
 
   const notify = () => rowControlsListener?.();
 
@@ -75,6 +76,12 @@ export function createAirQualityLayer({ source, overlayHost } = {}) {
 
     enable() {
       _enabled = true;
+      if (!removeCameraEnd) {
+        removeCameraEnd =
+          _viewer?.camera?.moveEnd?.addEventListener(() => {
+            if (_enabled) notify();
+          }) || null;
+      }
       if (_dataSource) _dataSource.show = true;
       overlayHost.setVisible(AIR_QUALITY_OVERLAY_SOURCE_ID, true);
       notify();
@@ -85,6 +92,8 @@ export function createAirQualityLayer({ source, overlayHost } = {}) {
       _request?.abort();
       _request = null;
       _enabled = false;
+      removeCameraEnd?.();
+      removeCameraEnd = null;
       if (_dataSource) _dataSource.show = false;
       overlayHost.clearSource(AIR_QUALITY_OVERLAY_SOURCE_ID);
       overlayHost.setVisible(AIR_QUALITY_OVERLAY_SOURCE_ID, false);
@@ -188,6 +197,8 @@ export function createAirQualityLayer({ source, overlayHost } = {}) {
       _request?.abort();
       _request = null;
       _enabled = false;
+      removeCameraEnd?.();
+      removeCameraEnd = null;
       overlayHost.clearSource(AIR_QUALITY_OVERLAY_SOURCE_ID);
       overlayHost.setVisible(AIR_QUALITY_OVERLAY_SOURCE_ID, false);
       if (_dataSource) {

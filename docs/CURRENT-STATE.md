@@ -1,5 +1,10 @@
 # God's Eye View Current State
 
+Air quality's highest-readings-in-view list refreshes when camera movement ends,
+using the retained station snapshot. Moving between Canada and an uncovered
+region updates the visible list without another feed request. The camera
+listener exists only while the layer is enabled and is released on teardown.
+
 The globe pauses safely if the browser loses its WebGL context and offers a
 keyboard-accessible **Reload map** control. A lost or zero-sized drawing buffer
 cannot reach Cesium's framebuffer allocation. A temporarily unsized buffer
