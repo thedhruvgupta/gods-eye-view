@@ -1,5 +1,15 @@
 # God's Eye View Current State
 
+Docker Compose mounts the checkout with the shared SELinux `:z` label so
+containers can read it on enforcing SELinux hosts. The separate image-owned
+`node_modules` volume and loopback-only port publishing remain unchanged.
+
+The HUD's LAT/LON degrees-minutes-seconds readout rounds the coordinate once, to
+hundredths of a second, and then splits it. A value within 0.005" of the next
+whole minute carries into the minutes and degrees, so `-122.35` reads
+`122°21'00.00"W` rather than `122°20'60.00"W`. The field widths and hemisphere
+letters are unchanged.
+
 Aircraft detection candidates reuse normalized display text until callsign or
 registration changes, including in-place enrichment. Each candidate resolves its
 fleet model once per collection. Positions, model ownership and tracked-aircraft
@@ -186,6 +196,23 @@ Regression coverage lives in `src/tools/area.test.mjs`,
 `src/tools/queries/environment.test.mjs` and
 `src/layers/perimeters/cards.test.mjs`.
 
+## Scope display controls
+
+Display's native Scope checkbox defaults ON with feather at 100%, adjustable
+from 0–200%. OFF disables the slider while retaining its value. HUD layout
+changes preserve both settings; share links and scenes restore them. The
+historical missing-`scf` fallback remains 35%; explicit 0% keeps the hard edge.
+
+With Scope OFF, Tactical, Operator and Minimal add text-sized black backplates
+at 70% opacity behind telemetry, vertical metadata and scene chrome. Original
+HUD text color, glow and opacity are preserved. Scope OFF brightens the tagline
+and Active Style label with the shared secondary text color. The title plate
+covers the eye and title without moving the title or tagline. Scope ON retains
+the original HUD presentation; Cyber retains its existing skin.
+
+`node scripts/qa-scope-hud.mjs` checks native input, range, layout persistence,
+restoration and both Scope presentations. `QA_SCREENSHOT_DIR` saves screenshots.
+
 ## Cyber HUD — September 30, 2026
 
 Display > HUD > Layout includes Cyber, also available through the HUD voice
@@ -296,6 +323,10 @@ catalog construction owns each instance.
 Wind animates one forecast without advancing forecast time. Separate Weather
 observation layers provide radar and satellite history; none claims measured cloud volume.
 Weather imagery releases its camera move listener on disable and registers it once on re-enable. Disabling also clears active imagery work.
+A staged weather frame with loaded tiles and no pending requests rechecks
+readiness on a single 150 ms wake timer instead of requesting every render.
+The existing readiness conditions and two settled frames still govern promotion;
+completion, cancellation, replacement and teardown clear the wake timer.
 Weather imagery drapes onto the globe basemap. On photorealistic 3D Tiles each
 observed product is instead a raised, translucent shell: one rectangle over the
 product bounds at a fixed height (global infrared 5.5 km, regional infrared
@@ -1838,6 +1869,12 @@ missing-key count. Existing server keys and the single-key fallback remain
 supported. `.env.example` and `pinokio/_ENVIRONMENT` document both entries.
 The Street View headings tool uses the same server-first selection after
 resolving environment overrides per variable; its explicit `--key` wins.
+
+In standalone development and preview servers, a missing Google tile-token
+provider returns an uncached `204 No Content` for `GET /api/google/tiles-token`
+(and HEAD) instead of a browser-visible 404. The fallback is registered after
+real token providers and before the unknown-API handler, so existing Google
+browser keys, provider-issued tokens, and unrelated API routes remain unchanged.
 
 ## Infrastructure marker visibility
 
@@ -5375,11 +5412,21 @@ pins and share links already supply complete boxes.
 
 ## Auth + Launch
 
+Vite's development filesystem deny list excludes local `.gev-logs/` and
+`.gev-cache/` contents and the package checkout's root `dist/`, while allowing
+dependency `dist/` assets. Checkout glob characters are escaped. This does not
+apply to `public/` assets or built-preview serving.
+
+
 - Recommended launcher: `./scripts/dev-fresh.sh` (also: `dev-secure.sh` for stricter bindings, `dev-cctv.sh` for CCTV source-pack tuning)
 - A successful Pinokio install writes the owner-only `pinokio/.installed`
   marker. The nested launcher menu resolves that marker from its own directory:
   an absent marker exposes Install, a present marker exposes Start, and a
-  running server with a captured ready URL exposes Open God's Eye View.
+  running server with a captured ready URL exposes Open God's Eye View. That
+  default item uses Pinokio's `popout` option to open the system browser; the
+  Server item retains the launcher console. The app's framing headers stay
+  unchanged. This does not assume all Pinokio desktop versions enforce those
+  headers in their embedded view.
 - Build gate: `npm run build`
 - Network access: local-only by default (`HOST=localhost` in dev-fresh.sh); LAN is an explicit opt-in via `HOST=0.0.0.0` (launcher prints a key-exposure warning + LAN URL; see SECURITY.md)
 - OpenSky default mode: OAuth (`OPENSKY_AUTH_MODE=oauth`; `anon` works without credentials)
@@ -5515,10 +5562,11 @@ the `_detectionUserOverridden` / explicit-intent flags that would suppress a
 separate landed behaviour. Pinned in `src/reasonableDefaults.test.mjs` (feather,
 detection, OUTSIDE opacity) and `src/data/layerState.test.mjs` (3D).
 
-**The 2026-08-24 defaults** (superseding the interim 08-23 values of 8%/3%):
+**Current defaults** (scope feather revised to 100% on 2026-10-25;
+detection and outside opacity retain the 2026-08-24 defaults):
 the first-run look is Detection DENSE
-`75%`, ELASTIC allocation, Fade `7%`, OUTSIDE opacity `1%`, scope feather `11%`,
-and 3D fleet mode PROXIMITY, with `AIRCRAFT_BRACKET_FLOOR_ANCHOR` at `0.01` so
+`75%`, ELASTIC allocation, Fade `7%`, OUTSIDE opacity `1%`, Scope ON with feather
+`100%`, and 3D fleet mode PROXIMITY, with `AIRCRAFT_BRACKET_FLOOR_ANCHOR` at `0.01` so
 brackets keep their approved brightness exactly at the new OUTSIDE default. Two
 terms that must never be conflated: scope FEATHER softens the black scope-mask
 edge; detection FADE is the label/card fading band around the keyhole. The
@@ -5588,14 +5636,10 @@ easier to meet (detection is now on more often), but does not create it.
   calibrated so `AIRCRAFT_BRACKET_ALPHA_FLOOR` (0.35) lands exactly at the
   default, and the mapping follows bracket brightness rather than slider
   position. The `ko` PARSE fallback stays at `5`.
-- **Scope feather: `11%`** — a soft scope-mask edge (moved `0% → 8% → 11%`; `0%` hard crop for one day,
-  `35%` before that). `SCOPE_FEATHER_RATIO_DEFAULT` in `src/scopeMask.js`,
-  mirrored by `#scope-feather-slider`'s markup value AND readout and
-  `_scopeFeatherPct` in `sharelink.js`. The slider is untouched and still spans
-  0–100, and an explicit `0` is still the hard-crop path — pinned, so moving the
-  default cannot quietly delete it. The `scf` PARSE fallback deliberately stays
-  at `35`: a link predating `scf` was authored when 35 was what its author saw,
-  and restoring the author's view is what a share link is for.
+- **Scope: `ON`, feather: `100%`**. `SCOPE_FEATHER_RATIO_DEFAULT` in
+  `src/scopeMask.js` matches the slider, readout and share generator. The range
+  is 0–200%; explicit 0% is a hard edge. Missing-`scf` links retain the historical
+  35% parse fallback.
 - **3D aircraft models: `ON`, mode `proximity`** — see the 3D Aircraft section
   above and the DISPLAY-rail entry below (was `OFF`).
 - Style shader starting params: CRT/NVG/FLIR pixelation `1.2` (just above the native `1.0` floor); thermal/FLIR ships an optional Ironbow "Predator" palette (`palette` uniform, default `0` = accurate grayscale).
@@ -6228,3 +6272,12 @@ when their footprints touch or contain one another, never across a seam toleranc
 - `scripts/qa-form-fields.mjs` exercises native selections, number validity,
   calibration commit/cancel and stale-camera/disposal guards against an installed
   controller with fixture ports, plus default/Cyber and narrow translated layouts.
+
+## Docker health reporting
+
+The Docker image probes its local HTTP root with Node every 30 seconds, using
+the launcher's parsed `PORT` (default 4173). A successful HTTP response marks
+the container healthy. Checks time out after 10 seconds, with a 30-second
+startup grace period and three consecutive failures before reporting unhealthy.
+This reports app HTTP availability, not individual provider health, and does not
+configure automatic restarts.
