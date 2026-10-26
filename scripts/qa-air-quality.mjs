@@ -20,7 +20,9 @@ const getOpt = (name, dflt) => {
   const i = argv.indexOf(name);
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
 };
-const APP_URL = getOpt('--url', 'http://localhost:4173');
+const targetUrl = new URL(getOpt('--url', 'http://localhost:4173'));
+if (!targetUrl.searchParams.has('welcome')) targetUrl.searchParams.set('welcome', '0');
+const APP_URL = targetUrl.href;
 const SCREENSHOT = getOpt('--screenshot', null);
 
 const results = [];
