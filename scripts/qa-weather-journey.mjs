@@ -60,11 +60,15 @@ const browser = await puppeteer.launch({
 });
 
 const steps = [];
+const pageErrors = [];
 let index = 0;
 try {
   const page = await browser.newPage();
   await page.setViewport({ width: 1400, height: 920, deviceScaleFactor: 2 });
-  page.on('pageerror', (e) => console.log('  [pageerror]', e.message));
+  page.on('pageerror', (e) => {
+    pageErrors.push(e.message);
+    console.log('  [pageerror]', e.message);
+  });
   // Non-2xx responses, counted per path so a burst of throttled tiles reads
   // as one line instead of one console error per tile.
   const failures = new Map();
@@ -110,7 +114,7 @@ try {
           globeShown: gev.viewer.scene.globe.show,
           heightM: Math.round(gev.viewer.camera.positionCartographic.height),
           summaryHeight: Math.round(
-            document.querySelector('.weather-summary')?.getBoundingClientRect()
+            document.querySelector('.weather-readout')?.getBoundingClientRect()
               .height ?? 0,
           ),
         };
@@ -156,6 +160,7 @@ try {
           const off = scene.postRender.addEventListener(() => {
             n += 1;
           });
+          scene.requestRender();
           setTimeout(() => {
             off();
             resolve(n);
@@ -169,6 +174,8 @@ try {
     const file = `${String(index).padStart(2, '0')}-${name}.png`;
     const d = await diagnostics();
     const r = await renders(2000);
+    if (r === 0)
+      throw new Error(`${name}: the scene did not render a requested frame`);
     await page.screenshot({ path: path.join(outDir, file) });
     reportFailures();
     steps.push({ index, name, note, file, renders2s: r, ...d });
@@ -185,14 +192,23 @@ try {
       btn.click();
       return true;
     }, id);
-    if (!ok) console.log(`  !! no row button for ${id}`);
+    if (!ok) throw new Error(`No row button for ${id}`);
   };
   const clickChip = async (id, chip) => {
     const ok = await page.evaluate(
       ({ id, chip }) => {
-        const btn = document.querySelector(
-          `[data-layer-id="${id}"] [data-chip-id="${chip}"]`,
+        const card = document.querySelector(
+          `#weather-panel [data-card-id="${id}"]`,
         );
+        if (card?.dataset.open === 'false')
+          card.querySelector('.rail-card-header')?.click();
+        const btn = ['play', 'latest'].includes(chip)
+          ? document.querySelector(
+              `.weather-timeline-block button[title="${chip === 'play' ? 'Replay observed history' : 'Newest frame per product'}"]`,
+            )
+          : card?.querySelector(
+              `[data-chip-id="${chip}"], [data-action-id="${chip}"]`,
+            );
         if (!btn || btn.disabled) return false;
         btn.scrollIntoView({ block: 'center' });
         btn.click();
@@ -200,33 +216,29 @@ try {
       },
       { id, chip },
     );
-    if (!ok) console.log(`  !! chip ${id}/${chip} missing or disabled`);
+    if (!ok) throw new Error(`Control ${id}/${chip} missing or disabled`);
     return ok;
   };
   const waitReady = (ids, timeout = 90_000) =>
-    page
-      .waitForFunction(
-        (ids) => {
-          const dm = window.__godsEyeView.dataManager;
-          for (const id of ids) {
-            const entry = dm.layers.get(id);
-            if (!entry?.enabled) return false;
-            const d = entry.module?.getDiagnostics?.() || {};
-            if (id === 'wind') {
-              if (d.renderMode === 'gpu-streamlines' && !d.gpu?.ready)
-                return false;
-            } else if (id !== 'weather-cyclones') {
-              if (d.loading || (!d.time && !d.error)) return false;
-            }
+    page.waitForFunction(
+      (ids) => {
+        const dm = window.__godsEyeView.dataManager;
+        for (const id of ids) {
+          const entry = dm.layers.get(id);
+          if (!entry?.enabled) return false;
+          const d = entry.module?.getDiagnostics?.() || {};
+          if (id === 'wind') {
+            if (d.renderMode === 'gpu-streamlines' && !d.gpu?.ready)
+              return false;
+          } else if (id !== 'weather-cyclones') {
+            if (d.loading || (!d.time && !d.error)) return false;
           }
-          return true;
-        },
-        { timeout, polling: 250 },
-        ids,
-      )
-      .catch(() =>
-        console.log(`  !! ${ids.join(',')} not ready within ${timeout} ms`),
-      );
+        }
+        return true;
+      },
+      { timeout, polling: 250 },
+      ids,
+    );
   const fly = async (
     lon,
     lat,
@@ -314,30 +326,32 @@ try {
     .waitForFunction(
       () =>
         !!document.querySelector(
-          '[data-layer-id="weather-cyclones"] .data-toggle-chip:not([data-chip-id="focus"]):not([data-chip-id="advisory"])',
+          '#weather-panel [data-card-id="weather-cyclones"] button[data-list-item-id]',
         ),
       { timeout: 25_000, polling: 500 },
     )
     .catch(() => {});
   const storm = await page.evaluate(() => {
+    const card = document.querySelector(
+      '#weather-panel [data-card-id="weather-cyclones"]',
+    );
+    if (card?.dataset.open === 'false')
+      card.querySelector('.rail-card-header')?.click();
     const first = document.querySelector(
-      '[data-layer-id="weather-cyclones"] .data-toggle-chip:not([data-chip-id="focus"]):not([data-chip-id="advisory"])',
+      '#weather-panel [data-card-id="weather-cyclones"] button[data-list-item-id]',
     );
     if (!first) return null;
     first.click();
     return first.textContent.trim();
   });
   if (storm) {
-    await sleep(1500);
-    if (await clickChip('weather-cyclones', 'focus')) {
-      await sleep(6000);
-      await shot('storm-view', `View storm: ${storm}`);
-      await page.evaluate(() =>
-        window.__godsEyeView.viewer.camera.zoomIn(400_000),
-      );
-      await sleep(4000);
-      await shot('storm-closer', 'Zoomed toward the storm');
-    }
+    await sleep(6000);
+    await shot('storm-view', `View storm: ${storm}`);
+    await page.evaluate(() =>
+      window.__godsEyeView.viewer.camera.zoomIn(400_000),
+    );
+    await sleep(4000);
+    await shot('storm-closer', 'Zoomed toward the storm');
   } else console.log('  (no active cyclone advisories to follow)');
 
   // 5. US radar, then regional → city → street over the same spot.
@@ -363,7 +377,7 @@ try {
     heights.push(
       await page.evaluate(() =>
         Math.round(
-          document.querySelector('.weather-summary')?.getBoundingClientRect()
+          document.querySelector('.weather-readout')?.getBoundingClientRect()
             .height ?? 0,
         ),
       ),
@@ -412,6 +426,9 @@ try {
   // 8. Back to Earth with everything on.
   await fly(-97.7431, 30.2672, 17_368_000, -90, 0, 2.5);
   await shot('globe-return', 'Return to Earth view');
+
+  if (pageErrors.length)
+    throw new Error(`Page errors: ${pageErrors.join(' | ')}`);
 
   writeFileSync(
     path.join(outDir, 'steps.json'),

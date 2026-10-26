@@ -10,6 +10,7 @@
  * with no reading surfacing as a confident 1 — is a real defect this catches.
  *
  * Run:  node scripts/qa-air-quality.mjs --url http://localhost:4173
+ *       [--screenshot /absolute/path/to/air-quality.png]
  */
 
 import puppeteer from 'puppeteer';
@@ -20,6 +21,7 @@ const getOpt = (name, dflt) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : dflt;
 };
 const APP_URL = getOpt('--url', 'http://localhost:4173');
+const SCREENSHOT = getOpt('--screenshot', null);
 
 const results = [];
 function record(name, ok, detail) {
@@ -135,17 +137,36 @@ async function main() {
     );
     const readoutOk =
       controls?.readout === true &&
-      Array.isArray(controls?.legend?.colors) &&
-      controls.legend.colors.length === controls.legend.labels.length &&
+      Array.isArray(controls?.legend) &&
+      controls.legend.length === 4 &&
+      controls.legend.every((entry) => entry.label && /^#[0-9a-f]{6}$/i.test(entry.color)) &&
       Array.isArray(controls?.list?.items) &&
       controls.list.items.length > 0 &&
-      controls.list.items.every((item) => item.id && item.label && item.value) &&
+      controls.list.items.every((item) => item.id && item.lead && item.text) &&
       /Canada only/.test(controls?.summary?.coverage || '');
     record('the Weather readout lists the worst readings in view, with a legend', readoutOk,
       controls
-        ? `bands=${controls.legend?.labels?.join('/')} inView=${controls.list?.items?.length} coverage="${controls.summary?.coverage}"`
+        ? `bands=${controls.legend?.map((entry) => entry.label).join('/')} inView=${controls.list?.items?.length} coverage="${controls.summary?.coverage}"`
         : 'no descriptor');
     if (!readoutOk) exitCode = 1;
+
+    const cardSelector = '#weather-panel [data-card-id="air-quality"]';
+    await page.waitForSelector(cardSelector, { timeout: 15000 });
+    if (!(await page.$eval(cardSelector, (node) => node.dataset.open === 'true'))) {
+      await page.click(`${cardSelector} .rail-card-header`);
+    }
+    const painted = await page.$eval(cardSelector, (node) => ({
+      visible: node.getBoundingClientRect().height > 0 && !node.closest('[hidden]'),
+      bands: [...node.querySelectorAll('.rail-card-legend-entry')].map((entry) => entry.textContent.trim()),
+      readings: [...node.querySelectorAll('.data-row-list-item')].map((entry) => entry.textContent),
+    }));
+    const paintedOk = painted.visible && readoutOk &&
+      controls.legend.every((entry) => painted.bands.includes(entry.label)) &&
+      controls.list.items.every((item) => painted.readings.some((text) => text.includes(item.lead) && text.includes(item.text)));
+    record('the visible Weather card paints every legend band and in-view reading', paintedOk,
+      `${painted.bands.join('/')} · ${painted.readings.length} readings`);
+    if (!paintedOk) exitCode = 1;
+    if (SCREENSHOT) await page.screenshot({ path: SCREENSHOT });
 
     record('no console errors', consoleErrors.length === 0,
       consoleErrors.length ? consoleErrors.slice(0, 2).join(' | ') : 'clean');
