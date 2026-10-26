@@ -1,5 +1,11 @@
 # God's Eye View Current State
 
+The globe pauses safely if the browser loses its WebGL context and offers a
+keyboard-accessible **Reload map** control. A lost or zero-sized drawing buffer
+cannot reach Cesium's framebuffer allocation. A temporarily unsized buffer
+resumes on a later frame; a lost context requires a fresh map because Cesium's
+existing GPU resources cannot be reused. Reloading retains saved preferences.
+
 Docker Compose mounts the checkout with the shared SELinux `:z` label so
 containers can read it on enforcing SELinux hosts. The separate image-owned
 `node_modules` volume and loopback-only port publishing remain unchanged.

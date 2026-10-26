@@ -1,4 +1,6 @@
 {
+  "The browser interrupted 3D graphics. Reload the map to restore rendering.": "Браузер прервал работу 3D-графики. Перезагрузите карту, чтобы восстановить отображение.",
+  "Reload map": "Перезагрузить карту",
   "Flying to Austin, TX...": "Перелёт в Остин, Техас...",
   "Restoring shared view...": "Восстановление общего вида...",
   "Initializing systems...": "Инициализация систем...",

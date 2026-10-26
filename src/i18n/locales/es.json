@@ -1,4 +1,6 @@
 {
+  "The browser interrupted 3D graphics. Reload the map to restore rendering.": "El navegador interrumpió los gráficos 3D. Vuelve a cargar el mapa para restaurar la visualización.",
+  "Reload map": "Volver a cargar el mapa",
   "NO PLACE LEFT BEHIND": "NINGÚN RINCÓN SIN VIGILAR",
   "Initializing photorealistic world...": "Inicializando el mundo fotorrealista...",
   "Configuring viewer...": "Configurando el visor...",
